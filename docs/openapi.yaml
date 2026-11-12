@@ -1,0 +1,633 @@
+openapi: 3.0.3
+info:
+  title: Applicant Records API
+  version: 1.0.0
+  description: |
+    API kecil untuk mencatat pelamar (ATS sederhana) dan memindahkan mereka antar stage rekrutmen.
+
+    **Role.** Semua endpoint `/applicants` wajib memakai header `X-Role` (`applicant` atau `recruiter`), didefinisikan sebagai security scheme `RoleHeader`.
+    Ini simulasi, bukan autentikasi: header bisa dipalsukan. Auth asli ada di roadmap post-MVP.
+
+    **Rate limit.** Fixed window 1 menit per IP: read 60 request, write (`POST`/`PATCH`) 20 request.
+    Melebihi batas: `429` dengan header `Retry-After`.
+
+    **Error.** Semua error memakai satu bentuk: `{ "error": { "code", "message", "details" } }`.
+servers:
+  - url: http://localhost:3000
+    description: Lokal
+
+security:
+  - RoleHeader: []
+
+tags:
+  - name: Applicants
+    description: Lamaran dan perpindahan stage.
+  - name: System
+    description: Endpoint operasional.
+
+paths:
+  /health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      summary: Health check
+      description: Tidak memerlukan `X-Role`.
+      security: []
+      responses:
+        "200":
+          description: Server hidup.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /applicants:
+    post:
+      tags: [Applicants]
+      operationId: createApplicant
+      summary: Buat lamaran baru
+      description: |
+        Mencari person berdasarkan email (setelah trim + lowercase). Jika belum ada, person dibuat.
+        Jika sudah ada, data person lama dipertahankan dan `name`/`phone` di request diabaikan.
+        Lalu lamaran dibuat di stage `applied` dan baris riwayat awal dicatat. Semua dalam satu transaksi.
+
+        Role: `applicant` atau `recruiter`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateApplicantRequest"
+            example:
+              name: Abyan Pratama
+              email: abyan@example.com
+              phone: "+6281234567890"
+              position: Back-End Engineer
+              batch: SKBatch2
+      responses:
+        "201":
+          description: Lamaran dibuat.
+          headers:
+            Location:
+              description: URL lamaran yang baru dibuat.
+              schema:
+                type: string
+                example: /applicants/1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicantDetail"
+              example:
+                data:
+                  id: 1
+                  person:
+                    id: 1
+                    name: Abyan Pratama
+                    email: abyan@example.com
+                    phone: "+6281234567890"
+                  position: Back-End Engineer
+                  batch: SKBatch2
+                  stage:
+                    code: applied
+                    name: Applied
+                  created_at: "2026-11-12T03:10:00.000Z"
+                  updated_at: "2026-11-12T03:10:00.000Z"
+                  history:
+                    - from_stage: null
+                      to_stage: applied
+                      changed_by_role: applicant
+                      reason: null
+                      created_at: "2026-11-12T03:10:00.000Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Orang yang sama sudah melamar posisi dan batch ini.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: DUPLICATE_APPLICATION
+                  message: Email ini sudah melamar posisi dan batch yang sama.
+                  details: []
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+    get:
+      tags: [Applicants]
+      operationId: listApplicants
+      summary: Daftar lamaran
+      description: |
+        Role: **hanya `recruiter`**. Role `applicant` mendapat 403, agar tidak melihat data pelamar lain.
+        Urutan default `created_at DESC, id DESC`.
+      parameters:
+        - name: stage
+          in: query
+          description: Filter berdasarkan `code` stage.
+          schema:
+            $ref: "#/components/schemas/StageCode"
+        - name: position
+          in: query
+          description: Filter berdasarkan posisi (sama persis).
+          schema:
+            type: string
+        - name: batch
+          in: query
+          description: Filter berdasarkan batch (sama persis).
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Jumlah item per halaman. Default 20, maksimum 100. Lebih dari 100 ditolak (422).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          description: Jumlah item yang dilewati.
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Daftar lamaran.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ApplicantSummary"
+                  meta:
+                    $ref: "#/components/schemas/PageMeta"
+              example:
+                data:
+                  - id: 1
+                    person:
+                      id: 1
+                      name: Abyan Pratama
+                      email: abyan@example.com
+                      phone: "+6281234567890"
+                    position: Back-End Engineer
+                    batch: SKBatch2
+                    stage:
+                      code: screening
+                      name: Screening
+                    created_at: "2026-11-12T03:10:00.000Z"
+                    updated_at: "2026-11-12T04:00:00.000Z"
+                meta:
+                  total: 1
+                  limit: 20
+                  offset: 0
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /applicants/{id}:
+    get:
+      tags: [Applicants]
+      operationId: getApplicant
+      summary: Detail lamaran beserta riwayat stage
+      description: |
+        Role: `applicant` atau `recruiter`. Untuk `applicant`, field `notes` pada riwayat tidak ditampilkan.
+        Catatan: tanpa autentikasi, siapa pun yang tahu id dapat membaca lamaran ini.
+      parameters:
+        - $ref: "#/components/parameters/ApplicantId"
+      responses:
+        "200":
+          description: Detail lamaran.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicantDetail"
+              example:
+                data:
+                  id: 1
+                  person:
+                    id: 1
+                    name: Abyan Pratama
+                    email: abyan@example.com
+                    phone: "+6281234567890"
+                  position: Back-End Engineer
+                  batch: SKBatch2
+                  stage:
+                    code: screening
+                    name: Screening
+                  created_at: "2026-11-12T03:10:00.000Z"
+                  updated_at: "2026-11-12T04:00:00.000Z"
+                  history:
+                    - from_stage: null
+                      to_stage: applied
+                      changed_by_role: applicant
+                      reason: null
+                      notes: null
+                      created_at: "2026-11-12T03:10:00.000Z"
+                    - from_stage: applied
+                      to_stage: screening
+                      changed_by_role: recruiter
+                      reason: null
+                      notes: CV sesuai kebutuhan
+                      created_at: "2026-11-12T04:00:00.000Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /applicants/{id}/stage:
+    patch:
+      tags: [Applicants]
+      operationId: updateApplicantStage
+      summary: Ubah stage lamaran
+      description: |
+        Memindahkan lamaran ke `to_stage`. Perubahan stage dan baris riwayat ditulis dalam satu transaksi.
+
+        **Aturan transisi**
+        - Maju satu arah: `applied → screening → assessment → interview → offering → hired`. Tidak ada pindah mundur dan tidak boleh melompat.
+        - `rejected`, `withdrawn`, `on_hold` dapat dicapai dari stage aktif mana saja.
+        - `hired`, `rejected`, `withdrawn` terminal: tidak ada transisi keluar.
+        - Dari `on_hold`: boleh ke `rejected`, `withdrawn`, atau resume **hanya** ke stage sebelum di-hold. Tidak boleh langsung ke `hired` atau stage lain.
+
+        **Hak role**
+        - `applicant`: hanya boleh ke `withdrawn`.
+        - `recruiter`: semua transisi yang sah kecuali `withdrawn`.
+
+        `reason` wajib untuk `rejected` dan `withdrawn`, opsional untuk lainnya.
+      parameters:
+        - $ref: "#/components/parameters/ApplicantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateStageRequest"
+            examples:
+              advance:
+                summary: Recruiter memajukan ke screening
+                value:
+                  to_stage: screening
+                  notes: CV sesuai kebutuhan
+              reject:
+                summary: Recruiter menolak (reason wajib)
+                value:
+                  to_stage: rejected
+                  reason: Belum memenuhi kualifikasi teknis
+              withdraw:
+                summary: Applicant mengundurkan diri (reason wajib)
+                value:
+                  to_stage: withdrawn
+                  reason: Sudah menerima tawaran di tempat lain
+              resume:
+                summary: Recruiter melanjutkan dari on_hold ke stage sebelum hold
+                value:
+                  to_stage: interview
+      responses:
+        "200":
+          description: Stage diperbarui.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicantDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Transisi tidak diizinkan dari stage saat ini.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error:
+                  code: INVALID_TRANSITION
+                  message: Tidak bisa pindah dari interview ke applied.
+                  details:
+                    - from_stage: interview
+                      to_stage: applied
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+components:
+  securitySchemes:
+    RoleHeader:
+      type: apiKey
+      in: header
+      name: X-Role
+      description: |
+        Simulasi identitas, bukan autentikasi. Nilai: `applicant` atau `recruiter`.
+        Header yang hilang atau nilai lain: 400 `INVALID_ROLE`.
+
+  parameters:
+    ApplicantId:
+      name: id
+      in: path
+      required: true
+      description: ID lamaran.
+      schema:
+        type: integer
+        minimum: 1
+
+  schemas:
+    Role:
+      type: string
+      enum: [applicant, recruiter]
+
+    StageCode:
+      type: string
+      enum:
+        - applied
+        - screening
+        - assessment
+        - interview
+        - offering
+        - hired
+        - rejected
+        - withdrawn
+        - on_hold
+
+    CreateApplicantRequest:
+      type: object
+      required: [name, email, position, batch]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: Dinormalisasi (trim + lowercase) sebelum disimpan.
+        phone:
+          type: string
+          nullable: true
+          pattern: '^\+?[0-9]{8,15}$'
+          description: Opsional.
+        position:
+          type: string
+          minLength: 1
+          maxLength: 100
+        batch:
+          type: string
+          minLength: 1
+          maxLength: 50
+
+    UpdateStageRequest:
+      type: object
+      required: [to_stage]
+      properties:
+        to_stage:
+          $ref: "#/components/schemas/StageCode"
+        reason:
+          type: string
+          maxLength: 500
+          description: Wajib jika `to_stage` adalah `rejected` atau `withdrawn`.
+        notes:
+          type: string
+          maxLength: 1000
+          description: Catatan internal recruiter. Tidak ditampilkan ke role `applicant`.
+
+    Person:
+      type: object
+      required: [id, name, email]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+          nullable: true
+
+    Stage:
+      type: object
+      required: [code, name]
+      properties:
+        code:
+          $ref: "#/components/schemas/StageCode"
+        name:
+          type: string
+
+    ApplicantSummary:
+      type: object
+      required: [id, person, position, batch, stage, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+        person:
+          $ref: "#/components/schemas/Person"
+        position:
+          type: string
+        batch:
+          type: string
+        stage:
+          $ref: "#/components/schemas/Stage"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    HistoryEntry:
+      type: object
+      required: [from_stage, to_stage, changed_by_role, created_at]
+      properties:
+        from_stage:
+          type: string
+          nullable: true
+          enum: [applied, screening, assessment, interview, offering, hired, rejected, withdrawn, on_hold, null]
+          description: Kosong pada baris awal (saat lamaran dibuat).
+        to_stage:
+          $ref: "#/components/schemas/StageCode"
+        changed_by_role:
+          $ref: "#/components/schemas/Role"
+        reason:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+          description: Hanya ada untuk role `recruiter`.
+        created_at:
+          type: string
+          format: date-time
+
+    ApplicantDetailData:
+      allOf:
+        - $ref: "#/components/schemas/ApplicantSummary"
+        - type: object
+          required: [history]
+          properties:
+            history:
+              type: array
+              description: Urut dari yang paling lama.
+              items:
+                $ref: "#/components/schemas/HistoryEntry"
+
+    ApplicantDetail:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/ApplicantDetailData"
+
+    PageMeta:
+      type: object
+      required: [total, limit, offset]
+      properties:
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    ErrorCode:
+      type: string
+      enum:
+        - INVALID_JSON
+        - INVALID_ROLE
+        - FORBIDDEN
+        - NOT_FOUND
+        - DUPLICATE_APPLICATION
+        - INVALID_TRANSITION
+        - PAYLOAD_TOO_LARGE
+        - VALIDATION_ERROR
+        - RATE_LIMITED
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, details]
+          properties:
+            code:
+              $ref: "#/components/schemas/ErrorCode"
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: JSON rusak, atau header `X-Role` hilang atau tidak valid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            invalidJson:
+              value:
+                error:
+                  code: INVALID_JSON
+                  message: Body bukan JSON yang valid.
+                  details: []
+            invalidRole:
+              value:
+                error:
+                  code: INVALID_ROLE
+                  message: Header X-Role wajib berisi applicant atau recruiter.
+                  details: []
+    Forbidden:
+      description: Role tidak berhak melakukan aksi ini.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: FORBIDDEN
+              message: Role applicant tidak boleh melihat daftar lamaran.
+              details: []
+    NotFound:
+      description: Lamaran tidak ditemukan.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: NOT_FOUND
+              message: Lamaran dengan id 99 tidak ditemukan.
+              details: []
+    PayloadTooLarge:
+      description: Body melebihi batas 10 KB.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: PAYLOAD_TOO_LARGE
+              message: Body melebihi 10 KB.
+              details: []
+    ValidationError:
+      description: Validasi field gagal.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: Input tidak valid.
+              details:
+                - field: email
+                  message: Format email tidak valid.
+                - field: reason
+                  message: Wajib diisi untuk stage rejected dan withdrawn.
+    RateLimited:
+      description: Batas request terlampaui.
+      headers:
+        Retry-After:
+          description: Detik sampai window berikutnya.
+          schema:
+            type: integer
+            example: 30
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: RATE_LIMITED
+              message: Terlalu banyak request. Coba lagi dalam 30 detik.
+              details: []
