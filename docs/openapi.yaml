@@ -5,13 +5,19 @@ info:
   description: |
     API kecil untuk mencatat pelamar (ATS sederhana) dan memindahkan mereka antar stage rekrutmen.
 
-    **Role.** Semua endpoint `/applicants` wajib memakai header `X-Role` (`applicant` atau `recruiter`), didefinisikan sebagai security scheme `RoleHeader`.
+    **Role.** Semua endpoint `/v1/applicants` wajib memakai header `X-Role` (`applicant` atau `recruiter`), didefinisikan sebagai security scheme `RoleHeader`.
     Ini simulasi, bukan autentikasi: header bisa dipalsukan. Auth asli ada di roadmap post-MVP.
 
     **Rate limit.** Fixed window 1 menit per IP: read 60 request, write (`POST`/`PATCH`) 20 request.
     Melebihi batas: `429` dengan header `Retry-After`.
 
     **Error.** Semua error memakai satu bentuk: `{ "error": { "code", "message", "details" } }`.
+
+    **Versi.** Endpoint bisnis berada di bawah `/v1`. `/health`, `/docs`, dan `/openapi.json` tidak diberi versi.
+
+    **Header respons.** Setiap respons membawa `X-Request-Id` (id dari klien dipakai ulang jika berupa `[A-Za-z0-9._-]{1,64}`, selain itu dibuat server). Respons `/v1/applicants` membawa `Cache-Control: no-store` karena berisi data pribadi.
+
+    **Method dan media type.** Method yang tidak didukung pada path yang ada: `405` + header `Allow` (`OPTIONS` dijawab `204` + `Allow`). Body yang bukan `application/json`: `415`.
 servers:
   - url: http://localhost:3000
     description: Lokal
@@ -31,11 +37,21 @@ paths:
       tags: [System]
       operationId: getHealth
       summary: Health check
-      description: Tidak memerlukan `X-Role`.
+      description: Tidak memerlukan `X-Role`. Memeriksa juga bahwa database bisa menjawab (`SELECT 1`).
       security: []
       responses:
+        "503":
+          description: Database tidak bisa menjawab.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: unavailable
         "200":
-          description: Server hidup.
+          description: Server hidup dan database menjawab.
           content:
             application/json:
               schema:
@@ -45,7 +61,7 @@ paths:
                     type: string
                     example: ok
 
-  /applicants:
+  /v1/applicants:
     post:
       tags: [Applicants]
       operationId: createApplicant
@@ -76,7 +92,7 @@ paths:
               description: URL lamaran yang baru dibuat.
               schema:
                 type: string
-                example: /applicants/1
+                example: /v1/applicants/1
           content:
             application/json:
               schema:
@@ -117,6 +133,8 @@ paths:
                   details: []
         "413":
           $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/ValidationError"
         "429":
@@ -203,7 +221,7 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
-  /applicants/{id}:
+  /v1/applicants/{id}:
     get:
       tags: [Applicants]
       operationId: getApplicant
@@ -257,7 +275,7 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
-  /applicants/{id}/stage:
+  /v1/applicants/{id}/stage:
     patch:
       tags: [Applicants]
       operationId: updateApplicantStage
@@ -332,6 +350,8 @@ paths:
                       to_stage: applied
         "413":
           $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/ValidationError"
         "429":
@@ -524,7 +544,9 @@ components:
         - NOT_FOUND
         - DUPLICATE_APPLICATION
         - INVALID_TRANSITION
+        - METHOD_NOT_ALLOWED
         - PAYLOAD_TOO_LARGE
+        - UNSUPPORTED_MEDIA_TYPE
         - VALIDATION_ERROR
         - RATE_LIMITED
 
@@ -598,6 +620,17 @@ components:
             error:
               code: PAYLOAD_TOO_LARGE
               message: Body melebihi 10 KB.
+              details: []
+    UnsupportedMediaType:
+      description: Body dikirim dengan `Content-Type` selain `application/json`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: UNSUPPORTED_MEDIA_TYPE
+              message: Content-Type harus application/json.
               details: []
     ValidationError:
       description: Validasi field gagal.

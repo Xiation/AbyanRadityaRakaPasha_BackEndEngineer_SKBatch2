@@ -6,7 +6,7 @@ Dokumen ini mencatat keputusan desain API applicant records beserta alasannya. D
 
 Applicant Tracking System (ATS) kecil untuk rekrutmen volunteer. Pengguna API: tim recruiter (dashboard internal) dan form pendaftaran. Skala: puluhan sampai ratusan pelamar per batch, segelintir pengguna internal.
 
-Satu "applicant" di API = satu lamaran (application) beserta data orangnya. Resource tetap bernama `/applicants`, meski tabelnya `applications`.
+Satu "applicant" di API = satu lamaran (application) beserta data orangnya. Resource tetap bernama `/v1/applicants`, meski tabelnya `applications`.
 
 ## 2. Data model
 
@@ -36,7 +36,7 @@ Data lama dipertahankan, data baru di request diabaikan. Alasan: data person tid
 
 ### Trade-off: create tanpa tabel person terpisah di API
 
-`POST /applicants` menerima data person inline (cari berdasarkan email, buat jika belum ada). Skema database sudah siap untuk alur person penuh, jadi upgrade nanti tidak membuang pekerjaan.
+`POST /v1/applicants` menerima data person inline (cari berdasarkan email, buat jika belum ada). Skema database sudah siap untuk alur person penuh, jadi upgrade nanti tidak membuang pekerjaan.
 
 ## 3. Stage dan aturan transisi
 
@@ -68,11 +68,11 @@ Penyederhanaan dari daftar awal: HR interview dan user interview digabung menjad
 
 ## 4. Role (`X-Role`)
 
-Header `X-Role: applicant | recruiter` wajib di semua request `/applicants`. Kosong atau nilai lain: 400.
+Header `X-Role: applicant | recruiter` wajib di semua request `/v1/applicants`. Kosong atau nilai lain: 400.
 
 - `PATCH` stage: applicant hanya boleh ke `withdrawn`. Recruiter boleh semua transisi kecuali `withdrawn`. Role yang tidak berhak: 403.
-- `GET /applicants` (list): hanya recruiter. Applicant mendapat 403, supaya tidak melihat data pelamar lain.
-- `GET /applicants/:id`: keduanya. Tampilan applicant tidak memuat `notes` internal.
+- `GET /v1/applicants` (list): hanya recruiter. Applicant mendapat 403, supaya tidak melihat data pelamar lain.
+- `GET /v1/applicants/:id`: keduanya. Tampilan applicant tidak memuat `notes` internal.
 - `stage_history` menyimpan `changed_by_role`.
 
 Keterbatasan: ini simulasi, bukan keamanan. Header bisa dipalsukan, dan tanpa auth siapa pun yang tahu id dapat melihat lamaran itu. Tujuannya hanya membuat riwayat stage dan aturan hak aksi dapat divalidasi.

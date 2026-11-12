@@ -46,13 +46,13 @@ Role dikirim lewat header `X-Role`. Ini simulasi untuk memvalidasi aturan dan ri
 | Method | Path | Fungsi | Role |
 |---|---|---|---|
 | GET | `/health` | Health check | semua |
-| POST | `/applicants` | Buat lamaran | applicant, recruiter |
-| GET | `/applicants` | List + filter + paginasi | recruiter |
-| GET | `/applicants/:id` | Detail + riwayat stage | applicant, recruiter |
-| PATCH | `/applicants/:id/stage` | Ubah stage | sesuai aturan transisi dan role |
+| POST | `/v1/applicants` | Buat lamaran | applicant, recruiter |
+| GET | `/v1/applicants` | List + filter + paginasi | recruiter |
+| GET | `/v1/applicants/:id` | Detail + riwayat stage | applicant, recruiter |
+| PATCH | `/v1/applicants/:id/stage` | Ubah stage | sesuai aturan transisi dan role |
 | GET | `/docs` | Dokumentasi interaktif (Swagger UI) | semua, tanpa `X-Role` |
 
-Kontrak lengkap: [openapi.yaml](openapi.yaml). `/health` dan `/docs` tidak termasuk dalam kontrak `/applicants`; keduanya dikecualikan dari `X-Role` dan rate limit.
+Kontrak lengkap: [openapi.yaml](openapi.yaml). `/health` dan `/docs` tidak termasuk dalam kontrak `/v1/applicants`; keduanya dikecualikan dari `X-Role` dan rate limit.
 
 ### 5.2 Kebutuhan fungsional
 
@@ -177,7 +177,7 @@ Memakai `node:test` dan `fetch` terhadap app dengan DB `:memory:`.
 Minimal:
 - Create valid, create invalid (tiap field wajib), email dinormalisasi, duplikat 409, person lama dipertahankan.
 - Transisi sah dan tidak sah, `reason` wajib, resume dari `on_hold` hanya ke stage sebelum hold, `hired` tidak bisa keluar.
-- Hak role: applicant ke stage selain `withdrawn` = 403, applicant `GET /applicants` = 403, `notes` tersembunyi untuk applicant.
+- Hak role: applicant ke stage selain `withdrawn` = 403, applicant `GET /v1/applicants` = 403, `notes` tersembunyi untuk applicant.
 - List: filter, default dan maksimum `limit`, `total`.
 - Rate limit mengembalikan 429 dengan `Retry-After`.
 - Peta transisi sinkron dengan stage hasil seed.

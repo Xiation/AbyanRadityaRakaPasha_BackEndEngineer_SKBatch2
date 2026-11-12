@@ -22,12 +22,14 @@ It was built for the Sekolah Karir **Back-End Engineer** mini assignment (SKBatc
 6. [Validation rules](#validation-rules)
 7. [Error format](#error-format)
 8. [Rate limiting](#rate-limiting)
-9. [Data model](#data-model)
-10. [Design decisions](#design-decisions)
-11. [Project structure](#project-structure)
-12. [Testing](#testing)
-13. [Security notes and known limitations](#security-notes-and-known-limitations)
-14. [AI usage disclosure](#ai-usage-disclosure)
+9. [Operational behavior](#operational-behavior)
+10. [Data model](#data-model)
+11. [Design decisions](#design-decisions)
+12. [Project structure](#project-structure)
+13. [Testing](#testing)
+14. [Security notes and known limitations](#security-notes-and-known-limitations)
+15. [Future improvements](#future-improvements)
+16. [AI usage disclosure](#ai-usage-disclosure)
 
 ---
 
@@ -57,11 +59,11 @@ npm start          # plain start
 
 Open **http://localhost:3000/docs** for the interactive Swagger UI.
 
-Environment variables (both optional):
+Environment variables (both optional, validated at startup; an invalid value stops the process with exit code 1 and a clear message):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PORT` | `3000` | HTTP port |
+| `PORT` | `3000` | HTTP port, integer 1 to 65535 |
 | `DB_PATH` | `applicants.db` | SQLite file. Use `:memory:` for a throwaway database. |
 
 The database file and the stage seed data are created automatically on first start (idempotent migration, safe on every start).
@@ -95,13 +97,13 @@ A test (`kontrak: setiap path + method di openapi.yaml ada di app`) fails if the
 
 ### Roles
 
-Every `/applicants` endpoint requires the header `X-Role: applicant` or `X-Role: recruiter`. A missing or unknown value returns `400 INVALID_ROLE`.
+Every `/v1/applicants` endpoint requires the header `X-Role: applicant` or `X-Role: recruiter`. A missing or unknown value returns `400 INVALID_ROLE`.
 
 | Capability | `applicant` | `recruiter` |
 |---|---|---|
 | Create an application | yes | yes |
-| Read one application (`GET /applicants/:id`) | yes (internal `notes` hidden) | yes (sees `notes`) |
-| List applications (`GET /applicants`) | **no** (`403`) | yes |
+| Read one application (`GET /v1/applicants/:id`) | yes (internal `notes` hidden) | yes (sees `notes`) |
+| List applications (`GET /v1/applicants`) | **no** (`403`) | yes |
 | Move to `withdrawn` | yes | **no** (`403`) |
 | Move to any other stage | **no** (`403`) | yes |
 
@@ -109,20 +111,22 @@ Every `/applicants` endpoint requires the header `X-Role: applicant` or `X-Role:
 
 ## Endpoints with real examples
 
-Base URL: `http://localhost:3000`. All outputs below are real responses from the running server.
+Base URL: `http://localhost:3000`. The business API is versioned under **`/v1`**; `/health`, `/docs` and `/openapi.json` are not. All outputs below are real responses from the running server.
+
+Every response carries an `X-Request-Id` header, and every `/v1/applicants` response carries `Cache-Control: no-store` (the bodies contain personal data). Methods a path does not support get `405` with an `Allow` header, and a request body that is not JSON gets `415`.
 
 | Method | Path | Purpose | Success |
 |---|---|---|---|
-| `GET` | `/health` | Liveness check (no role needed) | `200` |
-| `POST` | `/applicants` | Create an application | `201` + `Location` header |
-| `GET` | `/applicants` | List with filters and pagination (recruiter only) | `200` |
-| `GET` | `/applicants/:id` | One application with stage history | `200` |
-| `PATCH` | `/applicants/:id/stage` | Move to another stage | `200` |
+| `GET` | `/health` | Liveness + database check (no role needed) | `200`, or `503` if the DB cannot answer |
+| `POST` | `/v1/applicants` | Create an application | `201` + `Location` header |
+| `GET` | `/v1/applicants` | List with filters and pagination (recruiter only) | `200` |
+| `GET` | `/v1/applicants/:id` | One application with stage history | `200` |
+| `PATCH` | `/v1/applicants/:id/stage` | Move to another stage | `200` |
 
-### Create an applicant: `POST /applicants`
+### Create an applicant: `POST /v1/applicants`
 
 ```bash
-curl -i -X POST http://localhost:3000/applicants \
+curl -i -X POST http://localhost:3000/v1/applicants \
   -H 'Content-Type: application/json' \
   -H 'X-Role: applicant' \
   -d '{
@@ -134,7 +138,7 @@ curl -i -X POST http://localhost:3000/applicants \
   }'
 ```
 
-`201 Created`, `Location: /applicants/1`
+`201 Created`, `Location: /v1/applicants/1`
 
 ```json
 {
@@ -153,10 +157,10 @@ curl -i -X POST http://localhost:3000/applicants \
 
 Notes: the email was normalized (trimmed + lowercased). `phone` is optional. A new application always starts at `applied`, and the first history row has `from_stage: null`.
 
-### Move to another stage: `PATCH /applicants/:id/stage`
+### Move to another stage: `PATCH /v1/applicants/:id/stage`
 
 ```bash
-curl -X PATCH http://localhost:3000/applicants/1/stage \
+curl -X PATCH http://localhost:3000/v1/applicants/1/stage \
   -H 'Content-Type: application/json' \
   -H 'X-Role: recruiter' \
   -d '{ "to_stage": "screening", "notes": "CV matches the role" }'
@@ -178,10 +182,10 @@ curl -X PATCH http://localhost:3000/applicants/1/stage \
 
 Body fields: `to_stage` (required, one of the nine stage codes), `reason` (**required** for `rejected` and `withdrawn`, max 500), `notes` (optional internal note, max 1000).
 
-### List applicants: `GET /applicants`
+### List applicants: `GET /v1/applicants`
 
 ```bash
-curl 'http://localhost:3000/applicants?stage=screening&position=Back-End%20Engineer&limit=10&offset=0' \
+curl 'http://localhost:3000/v1/applicants?stage=screening&position=Back-End%20Engineer&limit=10&offset=0' \
   -H 'X-Role: recruiter'
 ```
 
@@ -212,10 +216,10 @@ curl 'http://localhost:3000/applicants?stage=screening&position=Back-End%20Engin
 
 Order is `created_at DESC, id DESC` (newest first, `id` as tie-breaker). `meta.total` is the count **before** pagination.
 
-### Read one application: `GET /applicants/:id`
+### Read one application: `GET /v1/applicants/:id`
 
 ```bash
-curl http://localhost:3000/applicants/1 -H 'X-Role: applicant'
+curl http://localhost:3000/v1/applicants/1 -H 'X-Role: applicant'
 ```
 
 Same body as the create response, with the whole `history` (oldest first). For the `applicant` role the `notes` field is **omitted from every history entry** (not set to `null`), because notes are internal to recruiters.
@@ -273,7 +277,7 @@ Every error, including unknown routes and framework errors, uses one shape:
 
 `code` is stable and machine-readable. `details` is always an array (empty when not applicable). Real examples:
 
-**422 validation** (`POST /applicants` with an empty name, bad email, missing batch):
+**422 validation** (`POST /v1/applicants` with an empty name, bad email, missing batch):
 
 ```json
 {
@@ -295,6 +299,18 @@ Every error, including unknown routes and framework errors, uses one shape:
 { "error": { "code": "INVALID_TRANSITION", "message": "Tidak bisa pindah dari stage screening ke offering", "details": [] } }
 ```
 
+**405 wrong method** (`DELETE /v1/applicants`, response carries `Allow: GET, POST, HEAD, OPTIONS`):
+
+```json
+{ "error": { "code": "METHOD_NOT_ALLOWED", "message": "Method DELETE tidak didukung di path ini. Gunakan: GET, POST, HEAD, OPTIONS.", "details": [] } }
+```
+
+**415 wrong media type** (body sent as `text/plain`):
+
+```json
+{ "error": { "code": "UNSUPPORTED_MEDIA_TYPE", "message": "Content-Type harus application/json.", "details": [] } }
+```
+
 **429 rate limited** (response also carries `Retry-After: 60`):
 
 ```json
@@ -308,8 +324,10 @@ Every error, including unknown routes and framework errors, uses one shape:
 | 403 | `FORBIDDEN` | role is not allowed (list as applicant, wrong stage for the role) |
 | 404 | `NOT_FOUND` | unknown application id or unknown route |
 | 409 | `DUPLICATE_APPLICATION` | same person + position + batch already exists |
+| 405 | `METHOD_NOT_ALLOWED` | known path, unsupported method (see the `Allow` header) |
 | 409 | `INVALID_TRANSITION` | stage move not allowed by the state machine |
 | 413 | `PAYLOAD_TOO_LARGE` | body over 10 KB |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | request has a body but `Content-Type` is not `application/json` |
 | 422 | `VALIDATION_ERROR` | any field failed validation (see `details`) |
 | 429 | `RATE_LIMITED` | rate limit exceeded |
 | 500 | `INTERNAL_ERROR` | unexpected bug; generic message, details only in the server log |
@@ -319,6 +337,15 @@ Error `message` texts are written in Indonesian (the target users), except valid
 ## Rate limiting
 
 Fixed window of 1 minute per client IP, with separate budgets: **60 reads** (`GET`) and **20 writes** (every other method, mainly `POST`/`PATCH`). Exceeding it returns `429` with a `Retry-After` header (seconds). `/health` and `/docs` are not limited. Limits are injectable (`createApp(db, { rateLimit })`), which is how the tests avoid throttling themselves and how the 429 behavior is tested with tiny limits.
+
+## Operational behavior
+
+- **Configuration** (`src/config.ts`): `PORT` and `DB_PATH` are parsed and validated with Zod at startup. `PORT=abc` or `PORT=70000` exits immediately with `Invalid configuration (PORT: ...)` instead of failing later inside `listen()`.
+- **Health** (`GET /health`): runs `SELECT 1`. Returns `{"status":"ok"}`, or `503 {"status":"unavailable"}` when the database cannot answer, so an orchestrator or load balancer can react.
+- **Request id and logging** (`src/middleware/requestLogger.ts`): each request gets an id (a client-supplied `X-Request-Id` is reused only if it matches `[A-Za-z0-9._-]{1,64}`, otherwise a UUID is generated), returned in the `X-Request-Id` response header. The server prints one JSON line per request, for example:
+  `{"ts":"2026-11-12T15:53:21.380Z","id":"a41f5bc7-...","method":"POST","path":"/v1/applicants","status":415,"ms":2.6}`.
+  The log deliberately contains no query string, body, headers or IP address, because those can hold personal data. Unexpected errors (500) are logged with the same id so a report can be traced.
+- **Graceful shutdown** (`src/server.ts`): on `SIGTERM` or `SIGINT` the server stops accepting connections, lets in-flight requests finish, closes the SQLite database, and exits with code 0. A 10-second timer forces exit if something hangs.
 
 ## Data model
 
@@ -348,17 +375,22 @@ The long version, with alternatives considered, is in [`docs/design-decisions.md
 7. **Offset pagination** with a stable order (`created_at DESC, id DESC`). Simple and enough for this scale; the order is already compatible with a future switch to keyset/cursor pagination.
 8. **Transactions** wrap create (person + application + first history row) and stage update (update + history row) so a failure never leaves half-written data.
 9. **Parameterized SQL only.** Filter values always go through `?` placeholders; only fixed fragments are concatenated into the query text.
+10. **URL versioning (`/v1`).** A breaking change can ship as `/v2` while `/v1` keeps working. Operational endpoints (`/health`, `/docs`) are outside the version on purpose.
+11. **Correct HTTP semantics for the unhappy paths.** `405` + `Allow` (instead of a misleading 404) for wrong methods, `415` for non-JSON bodies, `Cache-Control: no-store` for personal data, `201` + `Location` for creation.
 
 ## Project structure
 
 ```
 src/
-  server.ts                  process entry: reads PORT / DB_PATH, opens the DB, listens
+  server.ts                  process entry: config, DB, listen, graceful shutdown
+  config.ts                  loadConfig(env): validated PORT / DB_PATH
   app.ts                     createApp(db, options): middleware order and route mounting
   docs.ts                    Swagger UI at /docs and the spec at /openapi.json
   errors.ts                  AppError
   helper/validate.ts         parseOrThrow(schema, data): Zod -> 422 VALIDATION_ERROR
   middleware/
+    requestLogger.ts         X-Request-Id + one JSON log line per request
+    httpGuards.ts            no-store header, 415 media-type check, 405 + Allow helper
     role.ts                  X-Role check (simulated role)
     rateLimit.ts             fixed-window limiter (injectable limits)
     errorHandler.ts          404 handler + central error handler
@@ -373,7 +405,7 @@ src/
     applicants.repository.ts SQL only
     applicants.service.ts    business rules and transactions
     applicants.routes.ts     HTTP only
-test/                        db, stage rules and HTTP integration tests
+test/                        db, stage rules, config, process-level and HTTP integration tests
 docs/                        PRD, design decisions, ERD, OpenAPI
 ```
 
@@ -383,11 +415,13 @@ docs/                        PRD, design decisions, ERD, OpenAPI
 npm test
 ```
 
-55 tests (`node:test`), no mocks of the database or HTTP:
+70 tests (`node:test`), no mocks of the database or HTTP:
 
 - `test/stages.test.ts`: the pure state-machine rules, checked against an explicit list of the legal moves for all 81 (from, to) pairs (forward steps, skips, going backwards, terminal stages, role permissions, reason rules, resume from hold), plus a sync check against the seeded stages.
 - `test/db.test.ts`: migration creates all tables and seeds nine stages, migration is idempotent, `ON DELETE RESTRICT` blocks deleting a person with applications, the unique constraint on person + position + batch.
-- `test/applicants.test.ts`: the HTTP API against a real server on a random port with an in-memory DB: create/duplicate/normalization, validation errors, role errors, malformed and oversized bodies, every stage rule including on-hold resume, history order, `notes` visibility per role, list filters and pagination, rate limiting (429 + window recovery), `/docs`, a spec-vs-app contract check, and the security regressions listed below.
+- `test/applicants.test.ts`: the HTTP API against a real server on a random port with an in-memory DB: create/duplicate/normalization, validation errors, role errors, malformed and oversized bodies, every stage rule including on-hold resume, history order, `notes` visibility per role, list filters and pagination, rate limiting (429 + window recovery), `/v1` versioning, `405`/`415`/`no-store`, request id and the privacy of the log line, `/health` 200 and 503, `/docs`, a spec-vs-app contract check, and the security regressions listed below.
+- `test/config.test.ts`: defaults, coercion, boundaries and fail-fast messages of the environment config.
+- `test/server.test.ts`: starts the real process and checks graceful shutdown on `SIGTERM` and `SIGINT` (exit code 0) and that an invalid `PORT` exits with code 1.
 
 I also checked test strength by hand with mutation testing: deliberately breaking the code (removing the 403 check, leaking `notes`, ignoring a filter, reversing history order, dropping `updated_at`, and so on) and confirming at least one test fails for each mutation.
 
@@ -417,8 +451,19 @@ A short security review was done by reading the code and attacking the running s
 4. **Free text is stored as-is.** The API only emits JSON, but a front end that renders `name` must escape it (for example `<script>` is stored verbatim).
 5. **Phone numbers are validated but not normalized or unique.** `0812...` and `+62812...` are different values. Email is the identity key.
 6. **Error `message` language is mixed** (Indonesian from the app, English from Zod). `code` is the stable contract.
-7. **No HTTPS, CORS configuration, or request logging.** Intended to run behind a reverse proxy. Without a CORS policy, browsers block cross-origin calls to the API by default.
+7. **No HTTPS or CORS configuration.** Intended to run behind a reverse proxy. Without a CORS policy, browsers block cross-origin calls to the API by default. Request logging exists but is minimal (no log levels, rotation or shipping).
 8. **Offset pagination** can skip or repeat rows when data changes between page requests; keyset pagination is the upgrade path.
+
+## Future improvements
+
+Ideas that are deliberately out of scope for this assignment, roughly in order of value:
+
+1. **Optimistic locking for stage changes.** Today two recruiters can act on stale information (one rejects an application that the other has just moved forward; both moves are individually legal). Return an `ETag` (for example derived from `updated_at`) on reads and require `If-Match` on `PATCH`, answering `412 Precondition Failed` on a mismatch; in SQL, `UPDATE ... WHERE id = ? AND updated_at = ?` and check `changes`. For multi-process deployments also use `BEGIN IMMEDIATE`, `busy_timeout` and WAL mode.
+2. **Authentication and ownership checks** (see the first limitation above).
+3. **`RateLimit-*` headers on every response** (limit, remaining, reset), a purge of expired limiter entries, `HEAD`/`OPTIONS` counted as reads, and `trust proxy` when deployed behind one.
+4. **`Idempotency-Key` for `POST`**, so a retried request returns the original result instead of `409`.
+5. **Outbox pattern for stage-change events**: write an event row in the same transaction as the change, and let a separate worker deliver emails or webhooks. `stage_history` is already most of the way there.
+6. **Keyset (cursor) pagination**, phone normalization, editing person data, and soft delete / data-erasure for privacy.
 
 ## AI usage disclosure
 

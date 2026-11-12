@@ -15,6 +15,7 @@ export const notFoundHandler: RequestHandler = (req, _res, next) => {
 
 // Error middleware must declare 4 parameters, otherwise Express does not treat it as one.
 export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  const requestId = res.locals.requestId ?? "-";
   // 1. errors we throw on purpose (validation, duplicate, illegal transition, 404, 403, 429)
   if (err instanceof AppError) {
     return sendError(res, err.status, err.code, err.message, err.details);
@@ -29,6 +30,6 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   }
 
   // 3. anything else is a bug: log details server-side, never leak them to the client
-  console.error(err);
+  console.error(`[${requestId}]`, err);
   return sendError(res, 500, "INTERNAL_ERROR", "Terjadi kesalahan pada server.");
 };
